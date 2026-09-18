@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  web:
+    build: .
+    command: python3 app.py
+    volumes:
+      - .:/home/builder/app
+      - shared-uploads:/tmp/uploads
+    ports:
+      - "5000:5000"
+    depends_on:
+      - redis
+
+  worker:
+    build: .
+    command: celery -A tasks.celery_app worker --loglevel=info
+    volumes:
+      - .:/home/builder/app
+      - shared-uploads:/tmp/uploads
+    depends_on:
+      - redis
+
+volumes:
+  shared-uploads:
