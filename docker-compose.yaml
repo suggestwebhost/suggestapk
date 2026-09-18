@@ -18,7 +18,9 @@ services:
       - redis
 
   worker:
-    build: .
+    
+    build: 
+    user: builder.
     command: celery -A tasks.celery_app worker --loglevel=info
     volumes:
       - .:/home/builder/app
