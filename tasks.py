@@ -54,9 +54,9 @@ def compile_apk(self, job_dir, job_id):
         
         # 4. Compile the target Android bundle
         process = subprocess.run(
-            ['buildozer', 'android', 'debug'], 
+            "yes|buildozer android debug", 
             cwd=job_dir, 
-            capture_output=True, 
+            capture_output=True,
             text=True
         )
         
