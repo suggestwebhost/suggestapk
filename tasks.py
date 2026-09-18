@@ -7,14 +7,8 @@ from celery import Celery
 celery_app = Celery('tasks', broker='redis://redis:6379/0', backend='redis://redis:6379/0')
 
 def extract_dependencies(file_path):
-    """
-    Parses the uploaded Python file to detect top-level imported libraries.
-    """
     dependencies = set()
-    stdlib = {
-        'os', 'sys', 'time', 'math', 'json', 're', 'random', 'collections', 
-        'datetime', 'hashlib', 'socket', 'threading', 'itertools', 'functools'
-    }
+    stdlib = {'os', 'sys', 'time', 'math', 'json', 're', 'random', 'collections', 'datetime'}
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -33,67 +27,62 @@ def extract_dependencies(file_path):
 @celery_app.task(bind=True)
 def compile_apk(self, job_dir, job_id):
     try:
-        # 1. Initialize clean buildozer configurations
+        # 1. Initialize configurations
         subprocess.run(['buildozer', 'init'], cwd=job_dir, check=True)
         
-        # 2. Extract dependencies from the uploaded user script
+        # 2. Update configurations
         main_py_path = os.path.join(job_dir, 'main.py')
         detected_requirements = extract_dependencies(main_py_path)
         
-        # 3. Dynamic adjustment of parameters inside buildozer.spec
         spec_path = os.path.join(job_dir, 'buildozer.spec')
         with open(spec_path, 'r', encoding='utf-8') as file:
             spec_content = file.read()
             
-        # Target requirements line
-        spec_content = re.sub(
-            r'^requirements\s*=\s*.*$', 
-            f'requirements = python3, {detected_requirements}', 
-            spec_content, 
-            flags=re.MULTILINE
-        )
+        spec_content = re.sub(r'^requirements\s*=\s*.*$', f'requirements = python3, {detected_requirements}', spec_content, flags=re.MULTILINE)
+        spec_content = re.sub(r'^log_level\s*=\s*.*$', 'log_level = 2', spec_content, flags=re.MULTILINE)
         
-        # CRUCIAL FIX: Force log_level to max debug mode (2) so failures emit details
-        spec_content = re.sub(
-            r'^log_level\s*=\s*.*$', 
-            'log_level = 2', 
-            spec_content, 
-            flags=re.MULTILINE
-        )
-        
+        # EXPLICIT LICENSE AUTO-ACCEPTANCE FOR DOCKER CONTEXTS
+        if 'android.accept_sdk_license' in spec_content:
+            spec_content = re.sub(r'^#?\s*android\.accept_sdk_license\s*=\s*.*$', 'android.accept_sdk_license = True', spec_content, flags=re.MULTILINE)
+        else:
+            spec_content += "\nandroid.accept_sdk_license = True\n"
+
         with open(spec_path, 'w', encoding='utf-8') as file:
             file.write(spec_content)
         
-        # 4. Inject headless environment patches to force execution outside venvs
-        # We append local bin tools to PATH to stop Buildozer from breaking on virtualenv binaries
+        # 3. Create a physical text file to catch internal crash dumps
+        log_file_path = os.path.join(job_dir, "buildozer_output.log")
+        
+        # Force execution paths directly to where pip installs global CLI commands
         env_override = os.environ.copy()
-        env_override["PATH"] = f"/home/builder/.local/bin:{env_override.get('PATH', '')}"
+        env_override["PATH"] = f"/home/builder/.local/bin:/usr/local/bin:/usr/bin:/bin:{env_override.get('PATH', '')}"
         
-        # Execute compilation via shell using automatic prompt agreement
-        process = subprocess.Popen(
-            "yes | buildozer android debug", 
-            cwd=job_dir, 
-            shell=True,
-            env=env_override,
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE, 
-            text=True
-        )
-        
-        stdout, stderr = process.communicate()
+        # 4. Fire buildozer as an absolute tracking array writing directly to disk
+        with open(log_file_path, "w") as log_file:
+            process = subprocess.run(
+                ["buildozer", "android", "debug"],
+                cwd=job_dir,
+                env=env_override,
+                stdout=log_file,
+                stderr=subprocess.STDOUT, # Merge errors directly into the same file
+                text=True
+            )
+            
+        # Read the file content to verify success or print to trace logs
+        with open(log_file_path, "r") as log_file:
+            console_dump = log_file.read()
         
         if process.returncode != 0:
-            # We output stdout here because log_level = 2 dumps the exact compile trace to stdout
-            raise Exception(f"Buildozer engine compilation error.\nSTDOUT_LOGS:\n{stdout}\nSTDERR_LOGS:\n{stderr}")
+            raise Exception(f"Buildozer exited early with code {process.returncode}.\nCRASH LOGS:\n{console_dump}")
             
-        # 5. Locate the generated output binary
+        # 5. Extract output binary
         bin_dir = os.path.join(job_dir, 'bin')
         if not os.path.exists(bin_dir):
-            raise Exception(f"Build finished successfully, but output directory was missing.\nLogs: {stdout}")
+            raise Exception(f"Build finished cleanly, but target directory went missing.\nLogs:\n{console_dump}")
 
         apks = [f for f in os.listdir(bin_dir) if f.endswith('.apk')]
         if not apks:
-            raise Exception("Compilation finished, but no .apk binary found in the bin directory.")
+            raise Exception(f"APK not generated.\nLogs:\n{console_dump}")
             
         return {
             'status': 'Success',
