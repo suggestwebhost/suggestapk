@@ -1,54 +1,54 @@
 import os
+import requests
 from flask import Flask, request, jsonify, send_from_path
-from werkzeug.utils import secure_filename
-from tasks import compile_apk
 
 app = Flask(__name__)
-UPLOAD_FOLDER = '/tmp/uploads'
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+STORAGE = '/tmp/render_uploads'
+os.makedirs(STORAGE, exist_ok=True)
+
+GITHUB_REPO = "your_username/your_repo_name"
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN") # Set this in Render Env vars
 
 @app.route('/upload', methods=['POST'])
-def upload_file():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
-    
+def handle_upload():
     file = request.files['file']
-    if file.filename == '' or not file.filename.endswith('.py'):
-        return jsonify({'error': 'Invalid file type. Only .py files allowed.'}), 400
-
-    filename = secure_filename(file.filename)
-    # Buildozer expects the entrypoint to be named main.py
     job_id = os.urandom(8).hex()
-    job_dir = os.path.join(app.config['UPLOAD_FOLDER'], job_id)
-    os.makedirs(job_dir, exist_ok=True)
     
+    # Save code script into memory local storage path
+    job_dir = os.path.join(STORAGE, job_id)
+    os.makedirs(job_dir, exist_ok=True)
     file.save(os.path.join(job_dir, 'main.py'))
 
-    # Trigger Celery Task asynchronously
-    task = compile_apk.delay(job_dir, job_id)
-    
-    return jsonify({
-        'message': 'Compilation started',
-        'job_id': job_id,
-        'task_id': task.id,
-        'status_url': f'/status/{task.id}'
-    }), 202
+    # Remotely trigger the free GitHub action runner pipeline 
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+    data = {
+        "ref": "main", 
+        "inputs": {"job_id": job_id}
+    }
+    url = f"https://github.com{GITHUB_REPO}/actions/workflows/build-apk.yml/dispatches"
+    requests.post(url, json=data, headers=headers)
 
-@app.route('/status/<task_id>', methods=['GET'])
-def get_status(task_id):
-    task = compile_apk.AsyncResult(task_id)
-    response = {'state': task.state}
-    if task.state == 'SUCCESS':
-        response['download_url'] = f"/download/{task.result['job_id']}/{task.result['apk_name']}"
-    elif task.state == 'FAILURE':
-        response['error'] = str(task.info)
-    return jsonify(response)
+    return jsonify({"status": "Compiling via GitHub Runners...", "job_id": job_id})
 
-@app.route('/download/<job_id>/<apk_name>', methods=['GET'])
-def download(job_id, apk_name):
-    directory = os.path.join(app.config['UPLOAD_FOLDER'], job_id, 'bin')
-    return send_from_path(directory, apk_name, as_attachment=True)
+@app.route('/fetch-script/<job_id>', methods=['GET'])
+def send_to_github(job_id):
+    # GitHub Runner hits this endpoint to grab the raw uploaded script
+    return send_from_path(os.path.join(STORAGE, job_id), 'main.py')
+
+@app.route('/upload-finished/<job_id>', methods=['POST'])
+def accept_compiled_apk(job_id):
+    # GitHub Runner hits this endpoint to drop off the finished .apk binary
+    file = request.files['file']
+    job_dir = os.path.join(STORAGE, job_id)
+    file.save(os.path.join(job_dir, 'app.apk'))
+    return jsonify({"status": "Saved"}), 200
+
+@app.route('/download/<job_id>', methods=['GET'])
+def download(job_id):
+    return send_from_path(os.path.join(STORAGE, job_id), 'app.apk', as_attachment=True)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
