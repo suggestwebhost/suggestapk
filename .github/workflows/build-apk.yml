@@ -17,7 +17,7 @@ jobs:
       - name: Pull User Script from Render Storage
         run: |
           mkdir -p build_dir
-          curl -s "https://onrender.com{{ github.event.inputs.job_id }}" -o build_dir/main.py
+          curl -s "https://suggestapk.onrender.com{{ github.event.inputs.job_id }}" -o build_dir/main.py
 
       - name: Set up Java Development Kit (JDK)
         uses: actions/setup-java@v4
@@ -44,4 +44,4 @@ jobs:
       - name: Ship Finished Target Binary Back to Render Server
         run: |
           APK_PATH=$(find build_dir/bin/ -name "*.apk" | head -n 1)
-          curl -X POST -F "file=@$APK_PATH" "https://onrender.com{{ github.event.inputs.job_id }}"
+          curl -X POST -F "file=@$APK_PATH" "https://suggestapk.onrender.com{{ github.event.inputs.job_id }}"
