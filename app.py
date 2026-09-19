@@ -6,7 +6,7 @@ app = Flask(__name__)
 STORAGE = '/tmp/render_uploads'
 os.makedirs(STORAGE, exist_ok=True)
 
-GITHUB_REPO = "https://github.com/suggestwebhost/suggestapk.git"
+GITHUB_REPO = "https://github.com/suggestwebhost/suggestapk"
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN") # Set this in Render Env vars
 
 @app.route('/upload', methods=['POST'])
