@@ -1,0 +1,47 @@
+name: Remote APK Build Engine
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Unique identifier for the user upload tracking'
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      # Render server downloads the user's .py file into this job folder dynamically
+      - name: Pull User Script from Render Storage
+        run: |
+          mkdir -p build_dir
+          curl -s "https://onrender.com{{ github.event.inputs.job_id }}" -o build_dir/main.py
+
+      - name: Set up Java Development Kit (JDK)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Install System Dependencies for Buildozer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libncurses5 libtinfo5 cmake libffi-dev xclip
+
+      - name: Install Python Package Tooling
+        run: |
+          pip3 install --user --upgrade pip virtualenv cython buildozer
+
+      - name: Build Android APK Package via Buildozer
+        working-directory: build_dir
+        run: |
+          buildozer init
+          # Auto-agree to licenses and compile
+          yes | ~/.local/bin/buildozer android debug
+
+      - name: Ship Finished Target Binary Back to Render Server
+        run: |
+          APK_PATH=$(find build_dir/bin/ -name "*.apk" | head -n 1)
+          curl -X POST -F "file=@$APK_PATH" "https://onrender.com{{ github.event.inputs.job_id }}"
