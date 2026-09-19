@@ -1,6 +1,6 @@
 import os
 import requests
-from flask import Flask, request, jsonify, send_from_path
+from flask import Flask, request, jsonify, send_from_directory
 
 app = Flask(__name__)
 STORAGE = '/tmp/render_uploads'
